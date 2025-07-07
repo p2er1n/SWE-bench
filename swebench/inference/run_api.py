@@ -24,6 +24,7 @@ from datasets import load_dataset, load_from_disk
 from swebench.inference.make_datasets.utils import extract_diff
 from argparse import ArgumentParser
 import logging
+from transformers import AutoTokenizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -42,6 +43,9 @@ MODEL_LIMITS = {
     "gpt-4-0613": 8_192,
     "gpt-4-1106-preview": 128_000,
     "gpt-4-0125-preview": 128_000,
+
+    "deepseek-ai/DeepSeek-V3": 4_097,
+    "codellama:7b": 4_097
 }
 
 # The cost per token for each model input.
@@ -61,6 +65,9 @@ MODEL_COST_PER_INPUT = {
     "gpt-4-32k": 0.00006,
     "gpt-4-1106-preview": 0.00001,
     "gpt-4-0125-preview": 0.00001,
+
+    "deepseek-ai/DeepSeek-V3": 0.000002,
+    "codellama:7b": 0
 }
 
 # The cost per token for each model output.
@@ -80,6 +87,15 @@ MODEL_COST_PER_OUTPUT = {
     "gpt-4-32k": 0.00012,
     "gpt-4-1106-preview": 0.00003,
     "gpt-4-0125-preview": 0.00003,
+
+    "deepseek-ai/DeepSeek-V3": 0.000008,
+    "codellama:7b": 0
+}
+
+# used for openai compatiable api
+MODEL_NAME_to_HGGF = {
+    "deepseek-ai/DeepSeek-V3": "deepseek-ai/DeepSeek-V3",
+    "codellama:7b": "codellama/CodeLlama-7b-Instruct-hf"
 }
 
 # used for azure
@@ -145,7 +161,7 @@ def call_chat(model_name_or_path, inputs, use_azure, temperature, top_p, **model
                     {"role": "user", "content": user_message},
                 ],
                 temperature=temperature,
-                top_p=top_p,
+	                top_p=top_p,
                 **model_args,
             )
         input_tokens = response.usage.prompt_tokens
@@ -319,6 +335,84 @@ def call_anthropic_v2(
         time.sleep(20)
         return None
 
+def api_inference(
+    test_dataset,
+    model_name_or_path,
+    output_file,
+    model_args,
+    existing_ids,
+    max_cost,
+):
+    """
+    Runs inference on a dataset using the openai compatiable API.
+
+    Args:
+    test_dataset (datasets.Dataset): The dataset to run inference on.
+    model_name_or_path (str): The name or path of the model to use.
+    output_file (str): The path to the output file.
+    model_args (dict): A dictionary of model arguments.
+    existing_ids (set): A set of ids that have already been processed.
+    max_cost (float): The maximum cost to spend on inference.
+    """
+    # encoding = tiktoken.encoding_for_model(model_name_or_path)
+    encoding = AutoTokenizer.from_pretrained(MODEL_NAME_to_HGGF[model_name_or_path], trust_remote_code=True)
+    test_dataset = test_dataset.filter(
+        lambda x: gpt_tokenize(x["text"], encoding) <= MODEL_LIMITS[model_name_or_path],
+        desc="Filtering",
+        load_from_cache_file=False,
+    )
+    openai_key = os.environ.get("OPENAI_API_KEY", None)
+    if openai_key is None:
+        raise ValueError(
+            "Must provide an api key. Expected in OPENAI_API_KEY environment variable."
+        )
+    openai.api_key = openai_key
+    print(f"Using OpenAI key {'*' * max(0, len(openai_key) - 5) + openai_key[-5:]}")
+    api_base = os.environ.get("OPENAI_API_BASE", None)
+    if api_base is None:
+        raise ValueError(
+            "Must provide an api base. Expected in OPENAI_API_BASE environment variable."
+        )
+    openai.base_url = api_base
+    use_azure = model_args.pop("use_azure", False)
+    if use_azure:
+        openai.api_type = "azure"
+        openai.api_base = "https://pnlpopenai3.openai.azure.com/"
+        openai.api_version = "2023-05-15"
+    temperature = model_args.pop("temperature", 0.2)
+    top_p = model_args.pop("top_p", 0.95 if temperature > 0 else 1)
+    print(f"Using temperature={temperature}, top_p={top_p}")
+    basic_args = {
+        "model_name_or_path": model_name_or_path,
+    }
+    total_cost = 0
+    print(f"Filtered to {len(test_dataset)} instances")
+    with open(output_file, "a+") as f:
+        for datum in tqdm(test_dataset, desc=f"Inference for {model_name_or_path}"):
+            instance_id = datum["instance_id"]
+            if instance_id in existing_ids:
+                continue
+            output_dict = {"instance_id": instance_id}
+            output_dict.update(basic_args)
+            output_dict["text"] = f"{datum['text']}\n\n"
+            response, cost = call_chat(
+                output_dict["model_name_or_path"],
+                output_dict["text"],
+                use_azure,
+                temperature,
+                top_p,
+            )
+            completion = response.choices[0].message.content
+            total_cost += cost
+            print(f"Total Cost: {total_cost:.2f}")
+            output_dict["full_output"] = completion
+            output_dict["model_patch"] = extract_diff(completion)
+            print(json.dumps(output_dict), file=f, flush=True)
+            if max_cost is not None and total_cost >= max_cost:
+                print(f"Reached max cost {max_cost}, exiting")
+                break
+
+
 
 def anthropic_inference(
     test_dataset,
@@ -481,7 +575,7 @@ def main(
     if split not in dataset:
         raise ValueError(f"Invalid split {split} for dataset {dataset_name_or_path}")
     dataset = dataset[split]
-    lens = np.array(list(map(len, dataset["text"])))
+    lens = np.array(list(map(len, dataset["problem_statement"]))) # changed from 'text'
     dataset = dataset.select(np.argsort(lens))
     if len(existing_ids) > 0:
         dataset = dataset.filter(
@@ -504,7 +598,9 @@ def main(
     elif model_name_or_path.startswith("gpt"):
         openai_inference(**inference_args)
     else:
-        raise ValueError(f"Invalid model name or path {model_name_or_path}")
+        logger.info("Using openai-compatiable api")
+        api_inference(**inference_args) # new
+        # raise ValueError(f"Invalid model name or path {model_name_or_path}")
     logger.info("Done!")
 
 
