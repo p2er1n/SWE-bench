@@ -61,6 +61,13 @@ inference = [
     "flash_attn",
     "requests",
 ]
+inference-api = [
+    "anthropic",
+    "openai",
+    "tiktoken",
+    "transformers",
+    "requests",
+]
 test = [
     "pytest",
     "pytest-cov",
