@@ -532,7 +532,6 @@ def parse_model_args(model_args):
                 kwargs[key] = value
     return kwargs
 
-
 def main(
     dataset_name_or_path,
     split,
@@ -575,7 +574,7 @@ def main(
     if split not in dataset:
         raise ValueError(f"Invalid split {split} for dataset {dataset_name_or_path}")
     dataset = dataset[split]
-    lens = np.array(list(map(len, dataset["problem_statement"]))) # changed from 'text'
+    lens = np.array(list(map(len, dataset["text"])))
     dataset = dataset.select(np.argsort(lens))
     if len(existing_ids) > 0:
         dataset = dataset.filter(
