@@ -44,8 +44,8 @@ MODEL_LIMITS = {
     "gpt-4-1106-preview": 128_000,
     "gpt-4-0125-preview": 128_000,
 
-    "deepseek-ai/DeepSeek-V3": 4_097,
-    "codellama:7b": 4_097
+    "deepseek-ai/DeepSeek-V3": 128_000,
+    "codellama:7b-instruct": 100_000
 }
 
 # The cost per token for each model input.
@@ -67,7 +67,7 @@ MODEL_COST_PER_INPUT = {
     "gpt-4-0125-preview": 0.00001,
 
     "deepseek-ai/DeepSeek-V3": 0.000002,
-    "codellama:7b": 0
+    "codellama:7b-instruct": 0
 }
 
 # The cost per token for each model output.
@@ -89,13 +89,13 @@ MODEL_COST_PER_OUTPUT = {
     "gpt-4-0125-preview": 0.00003,
 
     "deepseek-ai/DeepSeek-V3": 0.000008,
-    "codellama:7b": 0
+    "codellama:7b-instruct": 0
 }
 
 # used for openai compatiable api
 MODEL_NAME_to_HGGF = {
     "deepseek-ai/DeepSeek-V3": "deepseek-ai/DeepSeek-V3",
-    "codellama:7b": "codellama/CodeLlama-7b-Instruct-hf"
+    "codellama:7b-instruct": "codellama/CodeLlama-7b-Instruct-hf"
 }
 
 # used for azure
