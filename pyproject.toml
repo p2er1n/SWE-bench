@@ -46,6 +46,7 @@ datasets = [
     "openai",
     "anthropic",
     "jedi",
+    "pyserini"
 ]
 inference = [
     "torch",
